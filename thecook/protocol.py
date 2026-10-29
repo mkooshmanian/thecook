@@ -3,10 +3,11 @@
 Multi-byte fields are big-endian. CRC is CRC-16/CCITT-FALSE (0x1021,
 init=0xffff, refin/refout=false, xorout=0). No serial link framing is added.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import binascii
 import re
 import struct
+from .timecode import CUCConfig, MODES, decode_cuc, parse_pfield
 
 NAMES = {(17, 1): "Ping", (17, 2): "Ping reply",
          (1, 1): "Acceptance successful", (1, 2): "Acceptance failed",
@@ -35,6 +36,7 @@ def integer(value: str) -> int:
 class Profile:
     code: int = 2
     tm_time_bytes: int = 8
+    time_config: CUCConfig = field(default_factory=CUCConfig)
 
     def __post_init__(self):
         if self.code not in (1, 2):
@@ -134,13 +136,33 @@ def decode(packet: bytes, profile=Profile()) -> dict:
         result["time_reference_status"] = packet[6] & 15
         offset += counter_size
         size = wire_profile.tm_destination_bytes
-        end = offset + size + profile.tm_time_bytes
-        if end > len(packet) - 2:
-            raise ValueError("Truncated TM header for the selected mission profile.")
+        if offset + size > len(packet) - 2:
+            raise ValueError("Truncated TM destination identifier.")
+        time_size = profile.tm_time_bytes
+        if profile.time_config.mode == MODES[1]:
+            try:
+                p_size, coarse, fine, _ = parse_pfield(packet[offset + size:-2])
+                time_size = p_size + coarse + fine
+            except ValueError:
+                # Keep the mission's fallback boundary; decode_cuc reports the
+                # malformed P-field without hiding the primary/PUS fields.
+                pass
+        end = offset + size + time_size
+        truncated = end > len(packet) - 2
+        if truncated:
+            end = len(packet) - 2
         result["destination"] = int.from_bytes(packet[offset:offset + size], "big")
         offset += size
-        result["time_raw"] = packet[offset:offset + profile.tm_time_bytes].hex()
-        offset += profile.tm_time_bytes
+        time_data = packet[offset:end]
+        result["time_raw"] = time_data.hex()
+        try:
+            if truncated:
+                result["undecoded_data"] = time_data.hex()
+                raise ValueError(f"Truncated timestamp: {len(time_data)} bytes available, expected {time_size}; payload boundary is unknown.")
+            result["time"] = decode_cuc(time_data, profile.time_config)
+        except ValueError as exc:
+            result["time_error"] = str(exc)
+            warnings.append(f"Timestamp decoding: {exc}")
         offset = end
     payload = packet[offset:-2]
     result["payload"] = payload.hex()

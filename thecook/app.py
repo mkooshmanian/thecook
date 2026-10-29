@@ -3,6 +3,7 @@ import json
 from collections import deque
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from queue import Empty, Full
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -11,6 +12,7 @@ from .protocol import (Profile, PacketStream, build_tc, decode, parse_hex,
                        integer, crc16)
 from .transport import SerialWorker
 from .layout import AutoScrollbar, FlowFrame, ScrollPage
+from .timecode import CUCConfig, MODES, EPOCHS
 
 BG = "#10151d"
 PANEL = "#19212c"
@@ -122,8 +124,17 @@ class App(tk.Tk):
         self.link_status = tk.StringVar(value="● Disconnected")
         row.add(ttk.Label(row, textvariable=self.link_status, foreground=ACCENT, wraplength=250))
         self.status = tk.StringVar(value="Ready · no bytes sent")
-        self.wrapped_label(self, textvariable=self.status, background=BG, foreground=MUTED,
-                           padding=(16, 8)).pack(side="bottom", fill="x", before=self.page)
+        footer = ttk.Frame(self)
+        footer.pack(side="bottom", fill="x", before=self.page)
+        try:
+            release = f"v{version('thecook')}"
+        except PackageNotFoundError:
+            release = "development"
+        self.version_label = ttk.Label(footer, text=release, background=BG,
+                                       foreground=MUTED, padding=(16, 8))
+        self.version_label.pack(side="right", anchor="s")
+        self.wrapped_label(footer, textvariable=self.status, background=BG, foreground=MUTED,
+                           padding=(16, 8)).pack(side="left", fill="x", expand=True)
         body = self.body = ttk.Frame(content)
         body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         body.columnconfigure(0, weight=1, uniform="panels")
@@ -183,11 +194,17 @@ class App(tk.Tk):
         bar.add(ttk.Button(bar, text="Clear", command=self.clear))
         table_box = ttk.Frame(right)
         table_box.pack(fill="both", expand=True)
-        columns = ("time", "direction", "type", "apid", "seq", "crc")
-        self.table = ttk.Treeview(table_box, columns=columns, show="headings", height=5, selectmode="browse")
-        for key, name, width in zip(columns, ["Time", "Flow", "PUS (S, SS)", "APID", "SEQ", "CRC"], [100, 65, 120, 65, 60, 65]):
+        columns = ("time", "direction", "type", "apid", "seq", "crc", "onboard")
+        self.table = ttk.Treeview(
+            table_box, columns=columns,
+            displaycolumns=("time", "type", "apid", "seq", "crc", "onboard", "direction"),
+            show="headings", height=5, selectmode="browse",
+        )
+        for key, name, width in zip(columns, ["Received (UTC)", "Flow", "PUS (S, SS)", "APID", "SEQ", "CRC", "Onboard time"], [140, 85, 120, 65, 60, 65, 250]):
             self.table.heading(key, text=name)
-            self.table.column(key, width=width, minwidth=45)
+            self.table.column(key, width=width,
+                              minwidth=180 if key == "onboard" else 140 if key == "time" else 85 if key == "direction" else 45,
+                              stretch=key != "direction")
         scroll = AutoScrollbar(table_box, orient="vertical", command=self.table.yview)
         horizontal = AutoScrollbar(table_box, orient="horizontal", command=self.table.xview)
         self.table.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
@@ -239,8 +256,11 @@ class App(tk.Tk):
 
     def update_profile_label(self):
         p = self.profile
+        t = p.time_config
+        timestamp = (f"CUC {t.coarse_bytes}+{t.fine_bytes} B" if t.mode == MODES[0]
+                     else "CUC from P-field" if t.mode == MODES[1] else f"raw {p.tm_time_bytes} B")
         self.profile_label.set(f"{p.name} · TC source ID size {p.tc_source_bytes} B\n"
-                               f"TM counter / destination ID sizes {p.tm_counter_bytes} / {p.tm_destination_bytes} B · timestamp {p.tm_time_bytes} B")
+                               f"TM counter / destination ID sizes {p.tm_counter_bytes} / {p.tm_destination_bytes} B · timestamp {timestamp}")
 
     def select_pus(self, _=None):
         self.profile = replace(self.profile, code=PUS_VARIANTS[self.vars["pus"].get()])
@@ -381,7 +401,7 @@ class App(tk.Tk):
             self.tx_count += 1
         elif origin == "RX":
             self.rx_count += 1
-        if not record["crc_ok"] or record.get("decode_error"):
+        if not record["crc_ok"] or record.get("decode_error") or record.get("time_error"):
             self.bad_count += 1
         self.stats.set(f"TX {self.tx_count}   /   RX {self.rx_count}   /   CRC / decoding errors {self.bad_count}   ·   log {len(self.records)}/2000")
         if self.matches(record):
@@ -396,8 +416,9 @@ class App(tk.Tk):
         packet_type = f"{r.get('service', '?')}, {r.get('subtype', '?')}"
         self.table.insert("", "end", iid=r["id"], values=(r["received_at"][11:23],
                           r["origin"], f"{r['kind']} ({packet_type})", r.get("apid", "?"),
-                          r.get("sequence", "?"), "OK" if r["crc_ok"] else "INVALID"),
-                          tags=("bad" if not r["crc_ok"] or r.get("decode_error") else "offline" if r["origin"] != "RX" else "",))
+                          r.get("sequence", "?"), "OK" if r["crc_ok"] else "INVALID",
+                          r.get("time", {}).get("display", "Invalid timestamp" if r.get("time_error") else "—")),
+                          tags=("bad" if not r["crc_ok"] or r.get("decode_error") or r.get("time_error") else "offline" if r["origin"] != "RX" else "",))
 
     def render_table(self):
         self.table.delete(*self.table.get_children())
@@ -414,6 +435,8 @@ class App(tk.Tk):
             summary = [record['name'],
                        f"{record['kind']} · APID {record.get('apid', '?')} · sequence {record.get('sequence', '?')} · {record['length']} bytes",
                        f"CRC: {'OK' if record['crc_ok'] else 'INVALID'}"]
+            if record.get("time", {}).get("display"):
+                summary.append(f"Onboard time: {record['time']['display']}")
             if 'request_id' in record:
                 summary.append(f"Referenced TC: APID {record['request_apid']} · sequence {record['request_sequence']}")
             if record['warnings']:
@@ -490,19 +513,59 @@ class App(tk.Tk):
             f"For example, Source ID = 0 is encoded as {'00' * p.tc_source_bytes}.\n"
             f"Allowed Source ID values: 0–{(1 << (8 * p.tc_source_bytes)) - 1}."),
             style="Muted.TLabel").pack(fill="x", pady=16)
-        self.wrapped_label(frame, text="TM timestamp field size · bytes").pack(fill="x", pady=(4, 3))
-        time_size = tk.StringVar(value=str(p.tm_time_bytes))
-        ttk.Entry(frame, textvariable=time_size).pack(fill="x")
+        self.wrapped_label(frame, text="Onboard time · CUC", style="Heading.TLabel").pack(fill="x", pady=(8, 4))
+        time_fields = {}
+        time_widgets = {}
+        settings = (("mode", "Timestamp format", p.time_config.mode, MODES),
+                    ("coarse_bytes", "Coarse time · whole-second bytes", p.time_config.coarse_bytes, None),
+                    ("fine_bytes", "Fine time · binary-fraction bytes", p.time_config.fine_bytes, None),
+                    ("epoch", "Epoch / time scale", p.time_config.epoch, EPOCHS),
+                    ("custom_epoch", "Custom TAI epoch · YYYY-MM-DDTHH:MM:SS", p.time_config.custom_epoch, None),
+                    ("raw_size", "Raw / fallback timestamp size · bytes", p.tm_time_bytes, None))
+        for key, label, value, choices in settings:
+            self.wrapped_label(frame, text=label).pack(fill="x", pady=(6, 3))
+            var = time_fields[key] = tk.StringVar(value=str(value))
+            if choices:
+                widget = ttk.Combobox(frame, textvariable=var, values=choices, state="readonly")
+            else:
+                widget = ttk.Entry(frame, textvariable=var)
+            widget.pack(fill="x")
+            time_widgets[key] = widget
+        def update_time_controls(_=None):
+            mode = time_fields["mode"].get()
+            for key in ("coarse_bytes", "fine_bytes"):
+                time_widgets[key].configure(state="normal" if mode == MODES[0] else "disabled")
+            time_widgets["raw_size"].configure(state="disabled" if mode == MODES[0] else "normal")
+            time_widgets["epoch"].configure(state="disabled" if mode == MODES[2] else "readonly")
+            time_widgets["custom_epoch"].configure(state="normal" if mode != MODES[2] and time_fields["epoch"].get() == EPOCHS[2] else "disabled")
+        time_widgets["mode"].bind("<<ComboboxSelected>>", update_time_controls)
+        time_widgets["epoch"].bind("<<ComboboxSelected>>", update_time_controls)
+        update_time_controls()
         self.wrapped_label(frame, text=(
-            "TM layout after the PUS control byte, service and subtype:\n"
-            f"counter ({p.tm_counter_bytes} B) → destination ID ({p.tm_destination_bytes} B) → timestamp.\n"
-            "There is no spare byte after the timestamp in these supported layouts.\n"
-            "Timestamps are displayed as raw hexadecimal bytes.\n"
+            "Implicit P-field: configure coarse/fine sizes; timestamp size is their sum.\n"
+            "Explicit P-field: read the format and timestamp size from each packet.\n"
+            "A CCSDS-epoch P-field selects 1958 TAI; agency-defined epochs use the setting above.\n"
+            "Default: explicit CUC P-field. It describes the time field and is excluded from the seconds count.\n"
+            "Fine time is a binary fraction of a second, not milliseconds.\n"
+            "CCSDS CUC uses TAI; TAI is not UTC. No leap-second conversion is applied.\n"
+            "Unix is an optional mission convention, not standard CCSDS epoch handling.\n"
+            "TM layout: counter → destination ID → timestamp, without spare bytes.\n"
+            "Raw timestamp bytes and exact elapsed seconds remain available in packet details.\n"
             "Existing log entries keep their original decoding."),
             style="Muted.TLabel").pack(fill="x", pady=16)
         def apply():
             try:
-                updated = replace(self.profile, tm_time_bytes=integer(time_size.get()))
+                mode = time_fields["mode"].get()
+                config = CUCConfig(
+                    mode=mode,
+                    coarse_bytes=integer(time_fields["coarse_bytes"].get()) if mode == MODES[0] else p.time_config.coarse_bytes,
+                    fine_bytes=integer(time_fields["fine_bytes"].get()) if mode == MODES[0] else p.time_config.fine_bytes,
+                    epoch=time_fields["epoch"].get(),
+                    custom_epoch=time_fields["custom_epoch"].get().strip(),
+                )
+                size = (config.coarse_bytes + config.fine_bytes if config.mode == MODES[0]
+                        else integer(time_fields["raw_size"].get()))
+                updated = replace(self.profile, tm_time_bytes=size, time_config=config)
             except ValueError as exc:
                 messagebox.showerror("Mission settings", str(exc), parent=dialog)
                 return

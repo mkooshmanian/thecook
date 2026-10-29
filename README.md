@@ -30,7 +30,7 @@ Open a new terminal after `pipx ensurepath`. Download the `.whl` file from the
 [GitHub releases](https://github.com/mkooshmanian/thecook/releases), then install it:
 
 ```bash
-pipx install ./thecook-0.1.0-py3-none-any.whl
+pipx install ./thecook-0.2.0-py3-none-any.whl
 thecook
 ```
 
@@ -38,7 +38,7 @@ Use the filename matching the downloaded version. pipx installs pyserial in an
 isolated environment and exposes `thecook` in `~/.local/bin` on Linux. Keep the
 wheel for installation; copying it directly into `~/.local/bin` does not install it.
 Use a Python installation that includes Tkinter; if needed, select it explicitly
-with `pipx install --python /usr/bin/python3 ./thecook-0.1.0-py3-none-any.whl`.
+with `pipx install --python /usr/bin/python3 ./thecook-0.2.0-py3-none-any.whl`.
 
 You can also install directly from GitHub without downloading a release:
 
@@ -92,11 +92,11 @@ python -m build
 python -m twine check dist/*
 ```
 
-For version 0.1.0 this creates:
+For version 0.2.0 this creates:
 
 ```text
-dist/thecook-0.1.0-py3-none-any.whl
-dist/thecook-0.1.0.tar.gz
+dist/thecook-0.2.0-py3-none-any.whl
+dist/thecook-0.2.0.tar.gz
 ```
 
 The wheel includes the application, dependency metadata and MIT license; Python,
@@ -106,7 +106,7 @@ the README and build configuration.
 The **Build release packages** GitHub Actions workflow builds and checks both
 archives, verifies installation with pipx, and attaches them when a GitHub release
 is published. Set the version in `pyproject.toml`, commit the change, and publish a
-release with the matching `v`-prefixed tag (for example, `v0.1.0`). The tag must point
+release with the matching `v`-prefixed tag (for example, `v0.2.0`). The tag must point
 to a commit containing the workflow. It does not publish anything to PyPI.
 A manual workflow run creates downloadable Actions artifacts without publishing
 a release.
@@ -178,8 +178,8 @@ of 1 means the identifier occupies one byte. A Source ID value of 0 is encoded a
 `00` in that byte; values 0–255 are allowed. For PUS-C, Source ID 0 is encoded as
 `0000` in two bytes; values 0–65535 are allowed. **Mission settings** explains
 this distinction and shows the fixed widths for the selected variant. Timestamp
-size can be adjusted there; timestamps remain raw, without assuming a time
-format or epoch. Neither supported layout adds a spare byte after the timestamp.
+and epoch can be adjusted there. Decoded CUC timestamps and their original raw
+bytes are shown in packet details and exports. Neither supported layout adds a spare byte after the timestamp.
 
 These two TC(17,1) packets are reproduced exactly (source 0, sequence 0, ACK 0x9):
 
@@ -204,8 +204,72 @@ The supplied TM stream splits into 25, 25 and 21 bytes, identified as TM(1,1),
 TM(1,7) and TM(17,2). All three CRCs are valid. Incoming packets use their own
 PUS variant to determine source/counter/destination widths; a mismatch with
 the selected outgoing variant is reported as a warning. Timestamp size follows
-the mission setting. Existing log entries keep their original decoding when
-settings change.
+the mission setting for an implicit P-field and is read from the packet for an
+explicit P-field. Existing log entries keep their original decoding when settings
+change; re-import an offline packet to apply new time settings.
+
+## CUC onboard time
+
+**Mission settings → Onboard time · CUC** configures decoding based on
+CCSDS 301.0-B-4, section 3.2. The reference PDF is not included in release packages.
+Only the CUC format is decoded; CDS, CCS and ASCII time formats are outside this
+release's scope.
+
+- **Implicit P-field:** the timestamp contains only the time field. Set the coarse
+  (whole-second) and fine (binary-fraction) byte counts. Total timestamp size is
+  calculated as their sum. Supported sizes are 1–7 coarse and 0–10 fine bytes.
+- **Explicit P-field:** each timestamp starts with a one- or two-byte P-field.
+  It determines the byte counts and packet timestamp boundary automatically.
+  The configured raw/fallback size is used only if the P-field is malformed.
+- **Raw hexadecimal:** retains the previous behaviour using the configured field
+  size, without attempting CUC decoding.
+
+All counters are big-endian. Fine time is a binary fraction, not an integer number
+of milliseconds or microseconds:
+
+```text
+elapsed seconds = coarse + fine / 256**(number of fine bytes)
+```
+
+The default is **CUC with an explicit P-field**. The preamble describes the time
+field and is excluded from the seconds count. For example, `1f4f3e3a68000000`
+contains P-field `1f`, four coarse bytes `4f3e3a68` and three fine bytes `000000`.
+It displays **2000-02-17 11:30:48** using the CCSDS epoch indicated
+by the P-field.
+
+For timestamps without a transmitted P-field, select implicit mode and configure
+the byte counts and epoch. For example, the earlier `4effa2228b964a00` timestamp
+with a 4+4 split represents `1325376034.54526197910308837890625` seconds since its
+epoch. The application does not guess between explicit and implicit formats.
+
+Choose the epoch explicitly:
+
+- **Relative / unknown:** show elapsed seconds without inventing a calendar date.
+- **CCSDS 1958 (TAI):** use 1958-01-01 00:00:00 TAI. An explicit CCSDS-epoch CUC
+  P-field selects this epoch regardless of the manual setting.
+- **Custom (TAI):** enter a whole-second TAI origin as `YYYY-MM-DDTHH:MM:SS`, with
+  no UTC offset. An agency-defined P-field requires the mission's epoch setting.
+- **Unix 1970 (mission convention):** interpret elapsed seconds as POSIX seconds
+  since 1970-01-01. Use only if the flight software implements that convention;
+  this is not standard CCSDS-epoch CUC handling.
+
+Calendar display omits the time-scale suffix; the time scale is retained in
+packet details and exports. No leap-second conversion is performed.
+Received (UTC) in the log is the computer's reception time and is
+separate from the decoded **Onboard time** column.
+
+The journal, packet details and JSON Lines export retain raw bytes, exact elapsed
+seconds, the fraction numerator/denominator and decoding settings. Displayed
+fractions are truncated to at most nine decimal places (an ellipsis marks omitted
+digits); exact decimal strings remain in the details/export, without float rounding.
+Invalid timestamps produce a decoding warning while preserving packet CRC and
+raw payload. Calendar overflow preserves the exact elapsed count.
+
+Run the time/protocol regression tests with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## Scope and limitations
 
