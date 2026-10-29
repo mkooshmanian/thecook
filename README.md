@@ -104,10 +104,21 @@ Tkinter and the ECSS documents are not bundled. The source archive also includes
 the README and build configuration.
 
 The **Build release packages** GitHub Actions workflow builds and checks both
-archives, verifies installation with pipx, and attaches them when a GitHub release
-is published. Set the version in `pyproject.toml`, commit the change, and publish a
-release with the matching `v`-prefixed tag (for example, `v0.2.0`). The tag must point
-to a commit containing the workflow. It does not publish anything to PyPI.
+archives, verifies installation with pipx, and creates a GitHub release with both
+files when a `v`-prefixed tag is pushed. The tag must match the version in
+`pyproject.toml` and point to a commit containing the workflow. For version 0.2.0,
+commit and push the changes first, then run:
+
+```bash
+git tag -a v0.2.0 -m "The Cook 0.2.0"
+git push origin v0.2.0
+```
+
+The workflow generates release notes automatically. A rerun uploads the packages
+to the existing release. It uses GitHub's built-in token and does not need a
+personal token or publish anything to PyPI. For future releases, update
+`pyproject.toml` before creating the matching tag. GitHub Actions must be enabled
+in the repository; the workflow requests `contents: write` for release creation.
 A manual workflow run creates downloadable Actions artifacts without publishing
 a release.
 
@@ -264,12 +275,6 @@ fractions are truncated to at most nine decimal places (an ellipsis marks omitte
 digits); exact decimal strings remain in the details/export, without float rounding.
 Invalid timestamps produce a decoding warning while preserving packet CRC and
 raw payload. Calendar overflow preserves the exact elapsed count.
-
-Run the time/protocol regression tests with:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
 
 ## Scope and limitations
 

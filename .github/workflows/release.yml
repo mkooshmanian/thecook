@@ -1,9 +1,14 @@
 name: Build release packages
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -21,9 +26,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check release version
-        if: github.event_name == 'release'
+        if: github.event_name == 'push'
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           python - <<'PY'
           import os
@@ -43,18 +48,28 @@ jobs:
         run: |
           pipx install dist/*.whl
           pipx runpip thecook check
+          thecook_pipx_bin="$(pipx environment --value PIPX_BIN_DIR)"
           cd "$RUNNER_TEMP"
-          "$HOME/.local/bin/thecook" --version
-          "$HOME/.local/bin/thecook" --help
+          "$thecook_pipx_bin/thecook" --version
+          "$thecook_pipx_bin/thecook" --help
       - name: Check time and protocol decoding
+        if: hashFiles('tests/**/test_*.py') != ''
         run: python -m unittest discover -s tests -v
       - uses: actions/upload-artifact@v5
         with:
           name: thecook-packages
           path: dist/*
-      - name: Attach packages to GitHub release
-        if: github.event_name == 'release'
+      - name: Create GitHub release with packages
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/*.whl dist/*.tar.gz \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/*.whl dist/*.tar.gz \
+              --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "The Cook $RELEASE_TAG" --generate-notes
+          fi
