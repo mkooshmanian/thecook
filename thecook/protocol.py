@@ -179,15 +179,31 @@ def decode(packet: bytes, profile=Profile()) -> dict:
 
 
 class PacketStream:
-    """Assemble bare CCSDS packets; CRC errors are delivered, never concealed.
+    """Assemble bare CCSDS packets, optionally recovering corrupted boundaries.
 
-    No reliable resynchronization is possible without a link framing protocol.
-    Only impossible primary headers are skipped; a plausible incomplete packet
-    remains buffered until completed or explicitly reset by the operator.
+    By default only impossible primary headers are skipped. Live links can opt
+    into CRC-assisted recovery: a complete valid packet inside an incomplete or
+    CRC-invalid candidate takes precedence over that candidate's length field.
+    This is a heuristic, since bare CCSDS has no unambiguous framing marker.
     """
-    def __init__(self):
+    def __init__(self, resynchronize=False):
         self.buffer = bytearray()
         self.discarded = 0
+        self.resynchronize = resynchronize
+
+    def _recovery_offset(self, size):
+        # Search only within the current candidate. A CRC-invalid packet followed
+        # by a valid packet at its declared boundary must still be delivered.
+        for offset in range(1, min(size, len(self.buffer) - 7)):
+            if self.buffer[offset] >> 5 != 0:
+                continue
+            candidate_size = int.from_bytes(self.buffer[offset + 4:offset + 6], "big") + 7
+            end = offset + candidate_size
+            if candidate_size < 8 or end > len(self.buffer):
+                continue
+            if crc16(self.buffer[offset:end - 2]) == int.from_bytes(self.buffer[end - 2:end], "big"):
+                return offset
+        return None
 
     def feed(self, data: bytes) -> list[bytes]:
         self.buffer.extend(data)
@@ -198,6 +214,15 @@ class PacketStream:
                 del self.buffer[0]
                 self.discarded += 1
                 continue
+            if self.resynchronize and (
+                len(self.buffer) < size
+                or crc16(self.buffer[:size - 2]) != int.from_bytes(self.buffer[size - 2:size], "big")
+            ):
+                offset = self._recovery_offset(size)
+                if offset is not None:
+                    del self.buffer[:offset]
+                    self.discarded += offset
+                    continue
             if len(self.buffer) < size:
                 break
             packets.append(bytes(self.buffer[:size]))

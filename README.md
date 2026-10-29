@@ -4,7 +4,8 @@
 > "vibe-coded" with GPT-6.1 sol. It is not intended for production use.
 
 A desktop dashboard for **cooking PUS telecommands** and inspecting telemetry
-received through a serial port. Built with Python, Tkinter and pyserial.
+received through a serial port or a TCP connection. Built with Python, Tkinter
+and pyserial.
 
 ## License
 
@@ -30,7 +31,7 @@ Open a new terminal after `pipx ensurepath`. Download the `.whl` file from the
 [GitHub releases](https://github.com/mkooshmanian/thecook/releases), then install it:
 
 ```bash
-pipx install ./thecook-0.2.0-py3-none-any.whl
+pipx install ./thecook-0.3.0-py3-none-any.whl
 thecook
 ```
 
@@ -38,7 +39,7 @@ Use the filename matching the downloaded version. pipx installs pyserial in an
 isolated environment and exposes `thecook` in `~/.local/bin` on Linux. Keep the
 wheel for installation; copying it directly into `~/.local/bin` does not install it.
 Use a Python installation that includes Tkinter; if needed, select it explicitly
-with `pipx install --python /usr/bin/python3 ./thecook-0.2.0-py3-none-any.whl`.
+with `pipx install --python /usr/bin/python3 ./thecook-0.3.0-py3-none-any.whl`.
 
 You can also install directly from GitHub without downloading a release:
 
@@ -53,7 +54,7 @@ To update a wheel installation, download the new wheel and replace the installed
 version (substitute the actual filename):
 
 ```bash
-pipx install --force ./thecook-0.2.0-py3-none-any.whl
+pipx install --force ./thecook-0.3.0-py3-none-any.whl
 ```
 
 For a GitHub installation, use `pipx upgrade thecook`. To remove the application:
@@ -92,11 +93,11 @@ python -m build
 python -m twine check dist/*
 ```
 
-For version 0.2.0 this creates:
+For version 0.3.0 this creates:
 
 ```text
-dist/thecook-0.2.0-py3-none-any.whl
-dist/thecook-0.2.0.tar.gz
+dist/thecook-0.3.0-py3-none-any.whl
+dist/thecook-0.3.0.tar.gz
 ```
 
 The wheel includes the application, dependency metadata and MIT license; Python,
@@ -106,12 +107,12 @@ the README and build configuration.
 The **Build release packages** GitHub Actions workflow builds and checks both
 archives, verifies installation with pipx, and creates a GitHub release with both
 files when a `v`-prefixed tag is pushed. The tag must match the version in
-`pyproject.toml` and point to a commit containing the workflow. For version 0.2.0,
+`pyproject.toml` and point to a commit containing the workflow. For version 0.3.0,
 commit and push the changes first, then run:
 
 ```bash
-git tag -a v0.2.0 -m "The Cook 0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "The Cook 0.3.0"
+git push origin v0.3.0
 ```
 
 The workflow generates release notes automatically. A rerun uploads the packages
@@ -133,8 +134,16 @@ can be scrolled in small windows as well.
 Scrollbars update with the visible area and automatically hide when scrolling is
 unnecessary, including the packet table's horizontal and vertical scrollbars.
 
-1. Select a serial port from the list (or enter its path), baud rate and serial
-   settings. Defaults are **115200, 8N1**, with no flow control.
+1. Choose **Serial** or **TCP** in **01 Communication link**. The
+   settings change immediately with the selected transport:
+
+   - **Serial:** select a port from the list (or enter its path), baud rate and
+     serial settings. Defaults are **115200, 8N1**, with no flow control.
+   - **TCP:** enter the hostname / IP address and TCP port. Defaults
+     are **localhost:4444**. The Cook connects as a TCP client.
+
+   Click **Connect**. Disconnect before changing transport or connection settings;
+   values are retained when switching between transports.
 2. Choose compatibility profile or PUS-C, then enter the APID, sequence count, source ID,
    service, subtype and hexadecimal
    application data. Numeric fields accept decimal values or hexadecimal values
@@ -142,28 +151,45 @@ unnecessary, including the packet table's horizontal and vertical scrollbars.
 3. Review the preview and click **Send TC**. Packet length and CRC are calculated
    automatically. Outgoing CCSDS sequence flags are fixed to **`11` (unsegmented)**;
    there is no segmentation setting. The sequence count advances modulo 16384
-   after the complete packet has been written to the serial port. This write
+   after the complete packet has been written to the link. This write
    confirmation is not a satellite acknowledgement.
 4. Select a log entry to inspect its fields, raw bytes, received/calculated CRC
    and, for TM(1,1–8), the Request ID of the referenced TC.
 
 The offline input accepts concatenated packets or successive fragments, using a
-buffer separate from the serial connection. **Reset RX buffers** discards any
+buffer separate from the live connection. **Reset RX buffers** discards any
 incomplete packets in both buffers. Filters do not affect exports.
 
 The log retains the **latest 2000 packets** and exports to JSON Lines, including
 UTC reception timestamps, origin, mission profile and complete packet hex.
-TX/RX counters count only serial traffic; offline input is labelled IMPORT.
+TX/RX counters count live serial or TCP traffic; offline input is labelled IMPORT.
 
 On Linux, the current user needs read/write permission on the serial device
 (often through the `dialout` group; group changes require a new login session).
 Connection, disconnection and write errors are displayed in the interface.
 
+### Connect to QEMU over TCP
+
+Start QEMU with a raw TCP serial server, for example:
+
+```bash
+qemu-system-arm -machine mps2-an500 -cpu cortex-m7 -m 16M \
+  -kernel /home/mkooshmanian/work/flight-software/build/output/flight-software.elf \
+  -nographic -serial mon:stdio -serial tcp:localhost:4444,server,nowait
+```
+
+In step 1, select **TCP**, keep **localhost** and **4444**, then click
+**Connect**. Telemetry is decoded in the usual traffic panel; **Send TC** writes
+telecommands back through the same socket. For another server, change the host
+and port. The TCP stream must carry raw binary CCSDS packets, just like the
+serial link; no Telnet negotiation or text conversion is applied. A remote
+closure or connection error is reported, and you can click **Connect** again.
+
 ## PUS variants and mission settings
 
 Use the **PUS variant** selector immediately before **Service** in the TC
 composer. Only **compatibility profile** and **PUS-C** are
-supported. The default is PUS-C. The selector is disabled while a serial connection
+supported. The default is PUS-C. The selector is disabled while a connection
 is open; disconnect before switching variants. Switching preserves the APID,
 Source ID, service and other entered values, clears incomplete RX buffers and
 recalculates the TC preview.
@@ -284,13 +310,20 @@ raw payload. Calendar overflow preserves the exact elapsed count.
 - Generic TC formatting and recognition of service 1 reports and service 17 ping
   packets. Other payloads remain hexadecimal, without service/mission-specific
   parameter decoding.
-- Serial transport expects **consecutive binary CCSDS packets**, without delimiters,
+- Serial and TCP transports expect **consecutive binary CCSDS packets**, without delimiters,
   SLIP, COBS, synchronization markers, frame encapsulation or ASCII hex conversion.
-- Fragmented serial reads are assembled using the packet length field. Invalid
+- Fragmented serial and TCP reads are assembled using the packet length field. Invalid
   CRCs remain visible. Outgoing packets are always unsegmented; received CCSDS
   segments are flagged and are not reassembled into application messages.
-- Without link framing, a corrupted but plausible length can leave the buffer
-  waiting for an incomplete packet or cause loss of alignment. Use **Reset RX
-  buffers** to recover. Only impossible primary headers are discarded automatically.
+- Live serial and TCP input uses CRC-assisted resynchronization. If a candidate
+  is incomplete or has an invalid CRC, a complete CRC-valid packet found inside
+  it takes precedence; preceding bytes are discarded and counted in the status
+  bar. This recovers, for example, from a duplicated first byte in a QEMU UART
+  stream. CRC-invalid packets at their declared boundaries remain visible.
+- Bare CCSDS has no unambiguous framing marker: recovery is a heuristic. A valid
+  packet embedded in the payload of a fragmented larger packet can be mistaken
+  for a new boundary. Offline input keeps strict length-based assembly. Without
+  a complete CRC-valid recovery candidate, a plausible incomplete packet remains
+  buffered; use **Reset RX buffers** to discard it.
 - Settings are not persisted between sessions. PUS services are not exhaustively
   implemented.

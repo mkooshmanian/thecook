@@ -1,1 +1,1 @@
-"""The Cook — PUS serial workbench."""
+"""The Cook — PUS serial and TCP workbench."""

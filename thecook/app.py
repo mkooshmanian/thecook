@@ -10,7 +10,7 @@ from tkinter import ttk, messagebox, filedialog
 
 from .protocol import (Profile, PacketStream, build_tc, decode, parse_hex,
                        integer, crc16)
-from .transport import SerialWorker
+from .transport import SerialWorker, TCPWorker
 from .layout import AutoScrollbar, FlowFrame, ScrollPage
 from .timecode import CUCConfig, MODES, EPOCHS
 
@@ -33,7 +33,7 @@ class App(tk.Tk):
         self.connected = False
         self.pending = False
         self.profile = Profile()
-        self.stream = PacketStream()
+        self.stream = PacketStream(resynchronize=True)
         self.offline_stream = PacketStream()
         self.records = deque(maxlen=2000)
         self.counter = 0
@@ -104,25 +104,44 @@ class App(tk.Tk):
         content = self.page.content
         head = FlowFrame(content, padding=(16, 4))
         head.pack(fill="x")
-        head.add(ttk.Label(head, text="the cook", style="Title.TLabel"))
+        head.add(ttk.Label(head, text="TheCook", style="Title.TLabel"))
         head.add(ttk.Label(head, text="/  SATELLITE PACKET KITCHEN", background=BG,
                            foreground=ACCENT))
         self.stats = tk.StringVar(value="TX 0   /   RX 0   /   CRC errors 0")
         self.wrapped_label(content, textvariable=self.stats, background=BG, foreground=MUTED).pack(fill="x", padx=18)
-        serial_card = self.card(content, "01   Serial link")
-        serial_card.pack(fill="x", padx=16, pady=12)
-        row = FlowFrame(serial_card, style="Card.TFrame", item_anchor="s")
+        link_card = self.card(content, "01   Communication link")
+        link_card.pack(fill="x", padx=16, pady=12)
+        row = FlowFrame(link_card, style="Card.TFrame", item_anchor="s")
         row.pack(fill="x")
-        self.port_box = self.field(row, "port", "Port", "", [], 23)
-        row.add(ttk.Button(row, text="↻", command=self.refresh_ports))
-        self.field(row, "baud", "Baud rate", "115200", width=10)
-        self.field(row, "bits", "Bits", "8", ["8", "7"], 3)
-        self.field(row, "parity", "Parity", "N", ["N", "E", "O"], 3)
-        self.field(row, "stop", "Stop bits", "1", ["1", "1.5", "2"], 3)
+        self.transport_box = self.field(row, "transport", "Transport", "Serial",
+                                        ["Serial", "TCP"], 17)
+        self.transport_box.bind("<<ComboboxSelected>>", self.select_transport)
         self.connect_button = ttk.Button(row, text="Connect", style="Accent.TButton", command=self.toggle_connection)
         row.add(self.connect_button)
         self.link_status = tk.StringVar(value="● Disconnected")
         row.add(ttk.Label(row, textvariable=self.link_status, foreground=ACCENT, wraplength=250))
+        self.serial_fields = FlowFrame(link_card, style="Card.TFrame", item_anchor="s")
+        self.serial_fields.pack(fill="x")
+        row = self.serial_fields
+        self.port_box = self.field(row, "port", "Port", "", [], 23)
+        refresh = ttk.Button(row, text="↻", command=self.refresh_ports)
+        row.add(refresh)
+        self.link_controls = [(self.transport_box, "readonly"), (self.port_box, "normal"),
+                              (refresh, "normal")]
+        for key, label, default, values, width in (
+            ("baud", "Baud rate", "115200", None, 10),
+            ("bits", "Bits", "8", ["8", "7"], 3),
+            ("parity", "Parity", "N", ["N", "E", "O"], 3),
+            ("stop", "Stop bits", "1", ["1", "1.5", "2"], 3),
+        ):
+            widget = self.field(row, key, label, default, values, width)
+            self.link_controls.append((widget, "readonly" if values else "normal"))
+        self.tcp_fields = FlowFrame(link_card, style="Card.TFrame", item_anchor="s")
+        host = self.field(self.tcp_fields, "host", "Host / IP address", "localhost", width=25)
+        tcp_port = self.field(self.tcp_fields, "tcp_port", "TCP port", "4444", width=8)
+        self.link_controls.extend([(host, "normal"), (tcp_port, "normal")])
+        self.tcp_fields.add(ttk.Label(self.tcp_fields, text="TCP client · raw binary stream",
+                                      style="Muted.TLabel"))
         self.status = tk.StringVar(value="Ready · no bytes sent")
         footer = ttk.Frame(self)
         footer.pack(side="bottom", fill="x", before=self.page)
@@ -295,6 +314,8 @@ class App(tk.Tk):
             self.status.set("TC copied to clipboard")
 
     def refresh_ports(self):
+        if self.worker:
+            return
         try:
             from serial.tools import list_ports
             ports = list(list_ports.comports())
@@ -306,6 +327,16 @@ class App(tk.Tk):
         except ImportError:
             self.link_status.set("pyserial missing · see README")
 
+    def select_transport(self, _=None):
+        self.serial_fields.pack_forget()
+        self.tcp_fields.pack_forget()
+        fields = self.serial_fields if self.vars["transport"].get() == "Serial" else self.tcp_fields
+        fields.pack(fill="x")
+
+    def set_link_controls(self, enabled):
+        for widget, state in self.link_controls:
+            widget.configure(state=state if enabled else "disabled")
+
     def toggle_connection(self):
         if self.worker:
             self.worker.stop()
@@ -315,19 +346,33 @@ class App(tk.Tk):
             self.preview()
             return
         try:
-            port = self.vars["port"].get().strip()
-            baud = integer(self.vars["baud"].get())
-            if not port or baud <= 0:
-                raise ValueError("Select a port and a positive baud rate.")
-            self.worker = SerialWorker(port, baud, self.vars["parity"].get(),
-                                       float(self.vars["stop"].get()), int(self.vars["bits"].get()))
-            self.stream = PacketStream()
+            if self.vars["transport"].get() == "TCP":
+                host = self.vars["host"].get().strip()
+                try:
+                    port = int(self.vars["tcp_port"].get().strip(), 10)
+                except ValueError:
+                    raise ValueError("Enter a TCP port between 1 and 65535.") from None
+                if not host or any(char.isspace() for char in host):
+                    raise ValueError("Enter a hostname or IP address without spaces.")
+                if not 1 <= port <= 65535:
+                    raise ValueError("Enter a TCP port between 1 and 65535.")
+                worker = TCPWorker(host, port)
+            else:
+                port = self.vars["port"].get().strip()
+                baud = integer(self.vars["baud"].get())
+                if not port or baud <= 0:
+                    raise ValueError("Select a port and a positive baud rate.")
+                worker = SerialWorker(port, baud, self.vars["parity"].get(),
+                                      float(self.vars["stop"].get()), int(self.vars["bits"].get()))
+            self.stream = PacketStream(resynchronize=True)
+            self.worker = worker
             self.worker.start()
+            self.set_link_controls(False)
             self.pus_box.configure(state="disabled")
             self.connect_button.configure(text="Disconnect")
             self.link_status.set("Connecting…")
         except ValueError as exc:
-            messagebox.showerror("Serial link", str(exc), parent=self)
+            messagebox.showerror("Communication link", str(exc), parent=self)
 
     def send(self):
         if not self.connected or not self.current_packet or self.pending:
@@ -349,8 +394,9 @@ class App(tk.Tk):
                 except Empty:
                     break
                 if kind == "connected":
-                    self.connected = True
-                    self.link_status.set(f"● {value}")
+                    if not worker.stopping.is_set():
+                        self.connected = True
+                        self.link_status.set(f"● {value}")
                 elif kind == "received":
                     self.ingest(value, "RX", self.stream)
                 elif kind == "sent":
@@ -358,17 +404,18 @@ class App(tk.Tk):
                     self.add_packet(value, "TX")
                     sequence = (int.from_bytes(value[2:4], "big") + 1) & 0x3fff
                     self.vars["seq"].set(str(sequence))
-                    self.status.set(f"TC written to port · {len(value)} bytes")
+                    self.status.set(f"TC written to link · {len(value)} bytes")
                 elif kind == "error":
                     self.connected = False
-                    self.status.set(f"Serial error: {value}")
-                    messagebox.showerror("Serial link", value, parent=self)
+                    self.status.set(f"Link error: {value}")
+                    messagebox.showerror("Communication link", value, parent=self)
                 elif kind == "closed":
                     self.connected = False
                     self.pending = False
                     self.worker = None
                     self.link_status.set("● Disconnected")
                     self.connect_button.configure(text="Connect", state="normal")
+                    self.set_link_controls(True)
                     self.pus_box.configure(state="readonly")
                     if self.stream.buffer:
                         self.status.set(f"Disconnected · {len(self.stream.buffer)} incomplete bytes in RX buffer")
@@ -458,9 +505,9 @@ class App(tk.Tk):
             messagebox.showerror("Decoding", str(exc), parent=self)
 
     def reset_stream(self):
-        self.stream = PacketStream()
+        self.stream = PacketStream(resynchronize=True)
         self.offline_stream = PacketStream()
-        self.status.set("Serial and offline RX assembly buffers reset")
+        self.status.set("Link and offline RX assembly buffers reset")
 
     def clear(self):
         self.records.clear()
@@ -485,7 +532,7 @@ class App(tk.Tk):
 
     def profile_dialog(self):
         if self.worker:
-            messagebox.showinfo("Mission settings", "Disconnect the serial link before changing mission settings.", parent=self)
+            messagebox.showinfo("Mission settings", "Disconnect the link before changing mission settings.", parent=self)
             return
         dialog = tk.Toplevel(self)
         dialog.title("Mission settings")
