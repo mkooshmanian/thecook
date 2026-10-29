@@ -1,0 +1,227 @@
+# The Cook
+
+> **Prototype — for demonstration purposes only.** This project was
+> "vibe-coded" with GPT-6.1 sol. It is not intended for production use.
+
+A desktop dashboard for **cooking PUS telecommands** and inspecting telemetry
+received through a serial port. Built with Python, Tkinter and pyserial.
+
+## License
+
+The application source code is licensed under the [MIT License](LICENSE).
+ECSS reference documents are not distributed with this project. Their rights
+remain with their respective owners.
+
+## Install with pipx
+
+The Cook requires **Python 3.10 or newer**, Tkinter and a graphical desktop.
+The same pure-Python wheel can be installed on Linux, macOS and Windows;
+Python, Tkinter and serial-device permissions must be available on the host.
+Tkinter is a Python/system component, not a dependency pipx can download from PyPI.
+
+On Debian/Ubuntu, install the prerequisites once:
+
+```bash
+sudo apt install pipx python3-tk python3-venv
+pipx ensurepath
+```
+
+Open a new terminal after `pipx ensurepath`. Download the `.whl` file from the
+[GitHub releases](https://github.com/mkooshmanian/thecook/releases), then install it:
+
+```bash
+pipx install ./thecook-0.1.0-py3-none-any.whl
+thecook
+```
+
+Use the filename matching the downloaded version. pipx installs pyserial in an
+isolated environment and exposes `thecook` in `~/.local/bin` on Linux. Keep the
+wheel for installation; copying it directly into `~/.local/bin` does not install it.
+Use a Python installation that includes Tkinter; if needed, select it explicitly
+with `pipx install --python /usr/bin/python3 ./thecook-0.1.0-py3-none-any.whl`.
+
+You can also install directly from GitHub without downloading a release:
+
+```bash
+pipx install 'git+https://github.com/mkooshmanian/thecook.git'
+```
+
+This requires Git and installs the current default branch. To install from an
+existing local checkout, use `pipx install .` in the repository directory.
+
+To update a wheel installation, download the new wheel and replace the installed
+version (substitute the actual filename):
+
+```bash
+pipx install --force ./thecook-0.2.0-py3-none-any.whl
+```
+
+For a GitHub installation, use `pipx upgrade thecook`. To remove the application:
+`pipx uninstall thecook`.
+
+The project is not published on PyPI; a bare `pipx install thecook` is not the
+installation method for this repository. Help and version are available without
+opening a window:
+
+```bash
+thecook --help
+thecook --version
+```
+
+## Run from source
+
+For development:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .
+python -m thecook
+```
+
+If pyserial and Tkinter are already installed in your Python environment, run
+`python3 -m thecook` directly from the repository.
+
+## Build a GitHub release
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install build twine
+python -m build
+python -m twine check dist/*
+```
+
+For version 0.1.0 this creates:
+
+```text
+dist/thecook-0.1.0-py3-none-any.whl
+dist/thecook-0.1.0.tar.gz
+```
+
+The wheel includes the application, dependency metadata and MIT license; Python,
+Tkinter and the ECSS documents are not bundled. The source archive also includes
+the README and build configuration.
+
+The **Build release packages** GitHub Actions workflow builds and checks both
+archives, verifies installation with pipx, and attaches them when a GitHub release
+is published. Set the version in `pyproject.toml`, commit the change, and publish a
+release with the matching `v`-prefixed tag (for example, `v0.1.0`). The tag must point
+to a commit containing the workflow. It does not publish anything to PyPI.
+A manual workflow run creates downloadable Actions artifacts without publishing
+a release.
+
+## Usage
+
+The dashboard adapts to split-screen windows: controls wrap onto extra rows and
+the TC and TM panels stack vertically when space is limited. Use the page's
+vertical scrollbar or the mouse wheel over labels and panel backgrounds to reach
+the rest of the interface. Text areas and the packet table keep their own scrolling.
+Keyboard navigation also scrolls focused controls into view. Mission settings
+can be scrolled in small windows as well.
+Scrollbars update with the visible area and automatically hide when scrolling is
+unnecessary, including the packet table's horizontal and vertical scrollbars.
+
+1. Select a serial port from the list (or enter its path), baud rate and serial
+   settings. Defaults are **115200, 8N1**, with no flow control.
+2. Choose compatibility profile or PUS-C, then enter the APID, sequence count, source ID,
+   service, subtype and hexadecimal
+   application data. Numeric fields accept decimal values or hexadecimal values
+   with the `0x` prefix.
+3. Review the preview and click **Send TC**. Packet length and CRC are calculated
+   automatically. Outgoing CCSDS sequence flags are fixed to **`11` (unsegmented)**;
+   there is no segmentation setting. The sequence count advances modulo 16384
+   after the complete packet has been written to the serial port. This write
+   confirmation is not a satellite acknowledgement.
+4. Select a log entry to inspect its fields, raw bytes, received/calculated CRC
+   and, for TM(1,1–8), the Request ID of the referenced TC.
+
+The offline input accepts concatenated packets or successive fragments, using a
+buffer separate from the serial connection. **Reset RX buffers** discards any
+incomplete packets in both buffers. Filters do not affect exports.
+
+The log retains the **latest 2000 packets** and exports to JSON Lines, including
+UTC reception timestamps, origin, mission profile and complete packet hex.
+TX/RX counters count only serial traffic; offline input is labelled IMPORT.
+
+On Linux, the current user needs read/write permission on the serial device
+(often through the `dialout` group; group changes require a new login session).
+Connection, disconnection and write errors are displayed in the interface.
+
+## PUS variants and mission settings
+
+Use the **PUS variant** selector immediately before **Service** in the TC
+composer. Only **compatibility profile** and **PUS-C** are
+supported. The default is PUS-C. The selector is disabled while a serial connection
+is open; disconnect before switching variants. Switching preserves the APID,
+Source ID, service and other entered values, clears incomplete RX buffers and
+recalculates the TC preview.
+
+PUS-C refers to [ECSS-E-ST-70-41C (15 April 2016)](https://ecss.nl/standards/).
+Clauses 7.4.1–7.4.4 describe headers, clause 8.1 verification reports, and annex
+B.1 the CRC. Obtain reference documents directly from ECSS; they are not included
+or needed at runtime. The compatibility profile variant is implemented from the mission layout
+and packets supplied with this project; no exhaustive compatibility profile specification is
+available. PUS-A is not supported.
+
+The generic differences between the supported variants are:
+
+| Field | compatibility profile | PUS-C |
+| --- | ---: | ---: |
+| TC source ID field size | 1 byte (8 bits) | 2 bytes (16 bits) |
+| TM message type counter field size | 1 byte (8 bits) | 2 bytes (16 bits) |
+| TM destination ID field size | 1 byte (8 bits) | 2 bytes (16 bits) |
+| Default timestamp size | 8 bytes | 8 bytes |
+
+**Field size is different from field value.** For compatibility profile, a TC source ID field size
+of 1 means the identifier occupies one byte. A Source ID value of 0 is encoded as
+`00` in that byte; values 0–255 are allowed. For PUS-C, Source ID 0 is encoded as
+`0000` in two bytes; values 0–65535 are allowed. **Mission settings** explains
+this distinction and shows the fixed widths for the selected variant. Timestamp
+size can be adjusted there; timestamps remain raw, without assuming a time
+format or epoch. Neither supported layout adds a spare byte after the timestamp.
+
+These two TC(17,1) packets are reproduced exactly (source 0, sequence 0, ACK 0x9):
+
+```text
+compatibility profile, APID 812: 1b2cc0000005191101001b73
+PUS-C,    APID  85: 1855c000000629110100009021
+```
+
+The supplied compatibility profile TM(1,1) splits as follows:
+
+```text
+0b2cc0020012 | 10 | 01 | 01 | 00 | 00 | 4effa2228b964a00 | 1b2cc000 | b283
+primary       PUS  svc  sub  ctr  dst  timestamp           request ID CRC
+```
+
+After the PUS control byte, service and subtype, **counter comes first,
+then destination ID, then timestamp**. The timestamp is `4effa2228b964a00`;
+its final `00` belongs to the timestamp. The two preceding `00` bytes are the
+counter and destination ID, respectively.
+
+The supplied TM stream splits into 25, 25 and 21 bytes, identified as TM(1,1),
+TM(1,7) and TM(17,2). All three CRCs are valid. Incoming packets use their own
+PUS variant to determine source/counter/destination widths; a mismatch with
+the selected outgoing variant is reported as a warning. Timestamp size follows
+the mission setting. Existing log entries keep their original decoding when
+settings change.
+
+## Scope and limitations
+
+- CCSDS Space Packets with big-endian primary headers; length field = total size − 7.
+- CRC-16/CCITT-FALSE: polynomial `0x1021`, initial value `0xFFFF`, no reflection,
+  zero final XOR, transmitted big-endian. All packets are assumed to include a CRC.
+- Generic TC formatting and recognition of service 1 reports and service 17 ping
+  packets. Other payloads remain hexadecimal, without service/mission-specific
+  parameter decoding.
+- Serial transport expects **consecutive binary CCSDS packets**, without delimiters,
+  SLIP, COBS, synchronization markers, frame encapsulation or ASCII hex conversion.
+- Fragmented serial reads are assembled using the packet length field. Invalid
+  CRCs remain visible. Outgoing packets are always unsegmented; received CCSDS
+  segments are flagged and are not reassembled into application messages.
+- Without link framing, a corrupted but plausible length can leave the buffer
+  waiting for an incomplete packet or cause loss of alignment. Use **Reset RX
+  buffers** to recover. Only impossible primary headers are discarded automatically.
+- Settings are not persisted between sessions. PUS services are not exhaustively
+  implemented.

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thecook"
+version = "0.1.0"
+description = "A serial PUS telecommand kitchen and telemetry dashboard"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = ["pyserial>=3.5,<4"]
+
+[project.scripts]
+thecook = "thecook.cli:main"
+
+[project.urls]
+Repository = "https://github.com/mkooshmanian/thecook"
+Issues = "https://github.com/mkooshmanian/thecook/issues"
+
+[tool.setuptools.packages.find]
+include = ["thecook*"]
