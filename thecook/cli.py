@@ -13,7 +13,18 @@ def main():
         description="The Cook — a desktop PUS telecommand and telemetry workbench.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {release}")
-    parser.parse_args()
+    parser.add_argument("--install-desktop-entry", action="store_true",
+                        help="install the Linux application-menu launcher and icon for this environment")
+    args = parser.parse_args()
+
+    if args.install_desktop_entry:
+        from .desktop import install_desktop_entry
+        try:
+            launcher = install_desktop_entry()
+        except (OSError, RuntimeError) as exc:
+            parser.exit(1, f"Unable to install desktop launcher: {exc}\n")
+        print(f"Desktop launcher installed: {launcher}")
+        return
 
     try:
         from .app import main as run_app

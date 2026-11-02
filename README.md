@@ -31,7 +31,7 @@ Open a new terminal after `pipx ensurepath`. Download the `.whl` file from the
 [GitHub releases](https://github.com/mkooshmanian/thecook/releases), then install it:
 
 ```bash
-pipx install ./thecook-0.3.0-py3-none-any.whl
+pipx install ./thecook-0.4.0-py3-none-any.whl
 thecook
 ```
 
@@ -39,7 +39,7 @@ Use the filename matching the downloaded version. pipx installs pyserial in an
 isolated environment and exposes `thecook` in `~/.local/bin` on Linux. Keep the
 wheel for installation; copying it directly into `~/.local/bin` does not install it.
 Use a Python installation that includes Tkinter; if needed, select it explicitly
-with `pipx install --python /usr/bin/python3 ./thecook-0.3.0-py3-none-any.whl`.
+with `pipx install --python /usr/bin/python3 ./thecook-0.4.0-py3-none-any.whl`.
 
 You can also install directly from GitHub without downloading a release:
 
@@ -54,7 +54,7 @@ To update a wheel installation, download the new wheel and replace the installed
 version (substitute the actual filename):
 
 ```bash
-pipx install --force ./thecook-0.3.0-py3-none-any.whl
+pipx install --force ./thecook-0.4.0-py3-none-any.whl
 ```
 
 For a GitHub installation, use `pipx upgrade thecook`. To remove the application:
@@ -68,6 +68,20 @@ opening a window:
 thecook --help
 thecook --version
 ```
+
+On Linux, register the application name and icon with the desktop menu/dock:
+
+```bash
+thecook --install-desktop-entry
+```
+
+This installs `thecook.desktop` and its icon under `~/.local/share` (or
+`XDG_DATA_HOME`) for the current user, without sudo. The launcher uses the same
+Python environment as the command, so it also works with pipx. Re-run this command
+if you move/reinstall the environment. The window icon is also set when launching
+from the terminal. If you uninstall the app, remove these two desktop files:
+`~/.local/share/applications/thecook.desktop` and `~/.local/share/icons/thecook.png`
+(use your `XDG_DATA_HOME` paths if configured).
 
 ## Run from source
 
@@ -93,11 +107,11 @@ python -m build
 python -m twine check dist/*
 ```
 
-For version 0.3.0 this creates:
+For version 0.4.0 this creates:
 
 ```text
-dist/thecook-0.3.0-py3-none-any.whl
-dist/thecook-0.3.0.tar.gz
+dist/thecook-0.4.0-py3-none-any.whl
+dist/thecook-0.4.0.tar.gz
 ```
 
 The wheel includes the application, dependency metadata and MIT license; Python,
@@ -107,12 +121,12 @@ the README and build configuration.
 The **Build release packages** GitHub Actions workflow builds and checks both
 archives, verifies installation with pipx, and creates a GitHub release with both
 files when a `v`-prefixed tag is pushed. The tag must match the version in
-`pyproject.toml` and point to a commit containing the workflow. For version 0.3.0,
+`pyproject.toml` and point to a commit containing the workflow. For version 0.4.0,
 commit and push the changes first, then run:
 
 ```bash
-git tag -a v0.3.0 -m "The Cook 0.3.0"
-git push origin v0.3.0
+git tag -a v0.4.0 -m "The Cook 0.4.0"
+git push origin v0.4.0
 ```
 
 The workflow generates release notes automatically. A rerun uploads the packages
@@ -144,9 +158,14 @@ unnecessary, including the packet table's horizontal and vertical scrollbars.
 
    Click **Connect**. Disconnect before changing transport or connection settings;
    values are retained when switching between transports.
-2. Choose compatibility profile or PUS-C, then enter the APID, sequence count, source ID,
-   service, subtype and hexadecimal
-   application data. Numeric fields accept decimal values or hexadecimal values
+2. Select the packet profile, then enter the APID, sequence count, source ID,
+   service, subtype and application data. Use the **Hexadecimal / ASCII** selector
+   to choose how the application data is interpreted (Hexadecimal by default).
+   Switching the selector reinterprets the current text; it does not convert it.
+   ASCII sends literal characters, including spaces and line breaks, with no
+   added terminator. Non-ASCII characters such as accented letters are rejected.
+   The complete TC preview remains hexadecimal in both modes.
+   Numeric fields accept decimal values or hexadecimal values
    with the `0x` prefix.
 3. Review the preview and click **Send TC**. Packet length and CRC are calculated
    automatically. Outgoing CCSDS sequence flags are fixed to **`11` (unsegmented)**;
@@ -185,65 +204,38 @@ and port. The TCP stream must carry raw binary CCSDS packets, just like the
 serial link; no Telnet negotiation or text conversion is applied. A remote
 closure or connection error is reported, and you can click **Connect** again.
 
-## PUS variants and mission settings
+## Packet layout and mission settings
 
-Use the **PUS variant** selector immediately before **Service** in the TC
-composer. Only **compatibility profile** and **PUS-C** are
-supported. The default is PUS-C. The selector is disabled while a connection
-is open; disconnect before switching variants. Switching preserves the APID,
-Source ID, service and other entered values, clears incomplete RX buffers and
-recalculates the TC preview.
+The default packet profile is **PUS-C**. Use the profile selector immediately
+before **Service** in the TC composer. Disconnect before switching profiles.
+Switching preserves the APID, Source ID, service and application data, clears
+incomplete RX buffers and applies the selected profile's time defaults. Mission
+settings allows those time defaults to be adjusted for the flight software.
+Existing journal entries keep their original decoding.
 
 PUS-C refers to [ECSS-E-ST-70-41C (15 April 2016)](https://ecss.nl/standards/).
 Clauses 7.4.1–7.4.4 describe headers, clause 8.1 verification reports, and annex
 B.1 the CRC. Obtain reference documents directly from ECSS; they are not included
-or needed at runtime. The compatibility profile variant is implemented from the mission layout
-and packets supplied with this project; no exhaustive compatibility profile specification is
-available. PUS-A is not supported.
+or needed at runtime. PUS-A is not supported.
 
-The generic differences between the supported variants are:
+In the PUS-C profile, source and destination identifiers and the TM message type
+counter each occupy **2 bytes**. A source ID value of 0 is therefore encoded as
+`0000`; the field's size and its numeric value are different settings. Mission
+settings shows the field sizes for the selected profile and configures timestamp
+handling. The generic TM layout after the PUS control byte, service and subtype
+is counter → destination ID → timestamp → application data → CRC.
 
-| Field | compatibility profile | PUS-C |
-| --- | ---: | ---: |
-| TC source ID field size | 1 byte (8 bits) | 2 bytes (16 bits) |
-| TM message type counter field size | 1 byte (8 bits) | 2 bytes (16 bits) |
-| TM destination ID field size | 1 byte (8 bits) | 2 bytes (16 bits) |
-| Default timestamp size | 8 bytes | 8 bytes |
-
-**Field size is different from field value.** For compatibility profile, a TC source ID field size
-of 1 means the identifier occupies one byte. A Source ID value of 0 is encoded as
-`00` in that byte; values 0–255 are allowed. For PUS-C, Source ID 0 is encoded as
-`0000` in two bytes; values 0–65535 are allowed. **Mission settings** explains
-this distinction and shows the fixed widths for the selected variant. Timestamp
-and epoch can be adjusted there. Decoded CUC timestamps and their original raw
-bytes are shown in packet details and exports. Neither supported layout adds a spare byte after the timestamp.
-
-These two TC(17,1) packets are reproduced exactly (source 0, sequence 0, ACK 0x9):
+This TC(17,1) is reproduced exactly (APID 85, source 0, sequence 0, ACK 0x9):
 
 ```text
-compatibility profile, APID 812: 1b2cc0000005191101001b73
-PUS-C,    APID  85: 1855c000000629110100009021
+1855c000000629110100009021
 ```
 
-The supplied compatibility profile TM(1,1) splits as follows:
-
-```text
-0b2cc0020012 | 10 | 01 | 01 | 00 | 00 | 4effa2228b964a00 | 1b2cc000 | b283
-primary       PUS  svc  sub  ctr  dst  timestamp           request ID CRC
-```
-
-After the PUS control byte, service and subtype, **counter comes first,
-then destination ID, then timestamp**. The timestamp is `4effa2228b964a00`;
-its final `00` belongs to the timestamp. The two preceding `00` bytes are the
-counter and destination ID, respectively.
-
-The supplied TM stream splits into 25, 25 and 21 bytes, identified as TM(1,1),
-TM(1,7) and TM(17,2). All three CRCs are valid. Incoming packets use their own
-PUS variant to determine source/counter/destination widths; a mismatch with
-the selected outgoing variant is reported as a warning. Timestamp size follows
-the mission setting for an implicit P-field and is read from the packet for an
-explicit P-field. Existing log entries keep their original decoding when settings
-change; re-import an offline packet to apply new time settings.
+Incoming packets determine their identifier and counter sizes from their PUS
+header; a mismatch with the selected outgoing profile is reported as a warning.
+Timestamp size follows the mission setting for an implicit P-field and is read
+from the packet for an explicit P-field. Re-import an offline packet to apply
+new time settings to its decoding.
 
 ## CUC onboard time
 

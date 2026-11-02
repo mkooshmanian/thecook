@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "thecook"
-version = "0.3.0"
+version = "0.4.0"
 description = "A serial and TCP PUS telecommand kitchen and telemetry dashboard"
 readme = "README.md"
 license = "MIT"
@@ -21,3 +21,6 @@ Issues = "https://github.com/mkooshmanian/thecook/issues"
 
 [tool.setuptools.packages.find]
 include = ["thecook*"]
+
+[tool.setuptools.package-data]
+thecook = ["assets/*.png"]

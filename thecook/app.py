@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
+from importlib.resources import files
 from queue import Empty, Full
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -13,6 +14,7 @@ from .protocol import (Profile, PacketStream, build_tc, decode, parse_hex,
 from .transport import SerialWorker, TCPWorker
 from .layout import AutoScrollbar, FlowFrame, ScrollPage
 from .timecode import CUCConfig, MODES, EPOCHS
+from .desktop import APP_NAME, WM_CLASS
 
 BG = "#10151d"
 PANEL = "#19212c"
@@ -24,8 +26,14 @@ PUS_VARIANTS = {"PUS ISIS": 1, "PUS-C": 2}
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__()
-        self.title("The Cook · PUS kitchen")
+        super().__init__(baseName="thecook", className=WM_CLASS)
+        self.tk.call("tk", "appname", APP_NAME)
+        self.title(f"{APP_NAME} · PUS kitchen")
+        self.iconname(APP_NAME)
+        original_icon = tk.PhotoImage(master=self, data=files("thecook").joinpath("assets/thecook.png").read_bytes())
+        self.window_icons = [original_icon.subsample(max(1, (original_icon.width() + size - 1) // size))
+                             for size in (256, 64, 32)]
+        self.iconphoto(True, *self.window_icons)
         self.geometry(f"{min(1440, self.winfo_screenwidth() - 80)}x{min(940, self.winfo_screenheight() - 120)}")
         self.minsize(420, 360)
         self.configure(bg=BG)
@@ -149,11 +157,15 @@ class App(tk.Tk):
             release = f"v{version('thecook')}"
         except PackageNotFoundError:
             release = "development"
+        self.footer_logo = self._load_footer_logo()
+        self.logo_label = ttk.Label(footer, image=self.footer_logo, background=BG,
+                                    padding=(0, 7, 16, 7))
+        self.logo_label.pack(side="right", anchor="s")
         self.version_label = ttk.Label(footer, text=release, background=BG,
-                                       foreground=MUTED, padding=(16, 8))
+                                       foreground=MUTED, padding=(6, 8, 6, 8))
         self.version_label.pack(side="right", anchor="s")
         self.wrapped_label(footer, textvariable=self.status, background=BG, foreground=MUTED,
-                           padding=(16, 8)).pack(side="left", fill="x", expand=True)
+                           padding=(16, 8, 0, 8)).pack(side="left", fill="x", expand=True)
         body = self.body = ttk.Frame(content)
         body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         body.columnconfigure(0, weight=1, uniform="panels")
@@ -182,10 +194,18 @@ class App(tk.Tk):
             v = tk.BooleanVar(value=mask in (8, 1))
             self.acks.append((v, mask))
             row.add(ttk.Checkbutton(row, text=text, variable=v, command=self.preview))
-        ttk.Label(left, text="Application data · hexadecimal", style="Muted.TLabel").pack(anchor="w", pady=(12, 4))
+        row = FlowFrame(left, style="Card.TFrame")
+        row.pack(fill="x", pady=(12, 4))
+        row.add(ttk.Label(row, text="Application data", style="Muted.TLabel"))
+        self.vars["payload_format"] = tk.StringVar(value="Hexadecimal")
+        self.payload_format_box = ttk.Combobox(
+            row, textvariable=self.vars["payload_format"],
+            values=["Hexadecimal", "ASCII"], state="readonly", width=14,
+        )
+        row.add(self.payload_format_box)
         self.payload = self.text_area(left, 2)
         self.payload.pack(fill="x")
-        self.payload.bind("<KeyRelease>", lambda _: self.preview())
+        self.payload.bind("<<Modified>>", self.payload_changed)
         ttk.Label(left, text="TC packet · automatic length and CRC", style="Muted.TLabel").pack(anchor="w", pady=(12, 4))
         self.preview_text = self.text_area(left, 2)
         self.preview_text.pack(fill="x")
@@ -247,10 +267,31 @@ class App(tk.Tk):
         row.pack(fill="x", pady=(6, 0))
         row.add(ttk.Button(row, text="Decode", command=self.import_hex))
         row.add(ttk.Button(row, text="Reset RX buffers", command=self.reset_stream))
-        for key in ("apid", "seq", "source", "service", "subtype"):
+        for key in ("apid", "seq", "source", "service", "subtype", "payload_format"):
             self.vars[key].trace_add("write", lambda *_: self.preview())
         self._wide_layout = None
         body.bind("<Configure>", self._resize_panels)
+
+    def _load_footer_logo(self):
+        original = tk.PhotoImage(master=self, data=files("thecook").joinpath("assets/doudous.png").read_bytes())
+        factor = max(1, (original.width() + 27) // 28, (original.height() + 21) // 22)
+        mask = original.subsample(factor)
+        logo = tk.PhotoImage(master=self, width=mask.width(), height=mask.height())
+        logo.put(BG, to=(0, 0, mask.width(), mask.height()))
+        # Blend the white source onto the footer first to retain edge transparency.
+        logo.tk.call(str(logo), "copy", str(mask), "-compositingrule", "overlay")
+        background = tuple(channel >> 8 for channel in self.winfo_rgb(BG))
+        foreground = tuple(channel >> 8 for channel in self.winfo_rgb(MUTED))
+        rows = []
+        for y in range(logo.height()):
+            row = []
+            for x in range(logo.width()):
+                coverage = (logo.get(x, y)[0] - background[0]) / (255 - background[0])
+                rgb = tuple(round(bg + coverage * (fg - bg)) for bg, fg in zip(background, foreground))
+                row.append("#%02x%02x%02x" % rgb)
+            rows.append(tuple(row))
+        logo.put(tuple(rows))
+        return logo
 
     def wrapped_label(self, parent, **kwargs):
         label = ttk.Label(parent, width=1, **kwargs)
@@ -282,18 +323,34 @@ class App(tk.Tk):
                                f"TM counter / destination ID sizes {p.tm_counter_bytes} / {p.tm_destination_bytes} B · timestamp {timestamp}")
 
     def select_pus(self, _=None):
-        self.profile = replace(self.profile, code=PUS_VARIANTS[self.vars["pus"].get()])
+        code = PUS_VARIANTS[self.vars["pus"].get()]
+        time_config = (CUCConfig(mode=MODES[0], coarse_bytes=4, fine_bytes=4, epoch=EPOCHS[1])
+                       if code == 1 else CUCConfig())
+        self.profile = replace(self.profile, code=code, tm_time_bytes=8, time_config=time_config)
         self.reset_stream()
         self.update_profile_label()
         self.preview()
         self.status.set(f"{self.profile.name} selected · APID and Source ID values unchanged")
+
+    def payload_changed(self, _=None):
+        if self.payload.edit_modified():
+            self.payload.edit_modified(False)
+            self.preview()
 
     def preview(self):
         try:
             values = {k: integer(self.vars[k].get()) for k in ("apid", "source", "service", "subtype")}
             values["sequence"] = integer(self.vars["seq"].get())
             values["ack"] = sum(mask for var, mask in self.acks if var.get())
-            self.current_packet = build_tc(**values, payload=parse_hex(self.payload.get("1.0", "end")), profile=self.profile)
+            text = self.payload.get("1.0", "end-1c")
+            if self.vars["payload_format"].get() == "ASCII":
+                try:
+                    payload = text.encode("ascii")
+                except UnicodeEncodeError:
+                    raise ValueError("ASCII only supports characters 00–7F; accented characters are not supported.") from None
+            else:
+                payload = parse_hex(text)
+            self.current_packet = build_tc(**values, payload=payload, profile=self.profile)
             packet = self.current_packet
             value = packet.hex(" ").upper()
             self.preview_status.set(f"{len(packet)} bytes · CRC {packet[-2:].hex().upper()} · TC({values['service']},{values['subtype']})")
@@ -547,7 +604,7 @@ class App(tk.Tk):
         frame.pack(fill="both", expand=True)
         p = self.profile
         self.wrapped_label(frame, text=p.name, style="Heading.TLabel").pack(fill="x")
-        self.wrapped_label(frame, text="Choose ISIS or C using the PUS variant selector before Service.",
+        self.wrapped_label(frame, text="Choose the packet profile using the selector before Service.",
                   style="Muted.TLabel").pack(fill="x", pady=(8, 16))
         for label, size in (("TC source ID field size", p.tc_source_bytes),
                             ("TM message type counter field size", p.tm_counter_bytes),
