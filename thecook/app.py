@@ -49,6 +49,7 @@ class App(tk.Tk):
         self.rx_count = 0
         self.bad_count = 0
         self.current_packet = None
+        self._follow_job = None
         self.vars = {}
         self._theme()
         self._layout()
@@ -173,7 +174,7 @@ class App(tk.Tk):
         body.rowconfigure(0, weight=1)
         left = self.composer = self.card(body, "02   Cook a telecommand")
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        right = self.telemetry = self.card(body, "03   Traffic & telemetry")
+        right = self.telemetry = self.card(body, "03   Traffic")
         right.grid(row=0, column=1, sticky="nsew")
         row = FlowFrame(left, style="Card.TFrame")
         row.pack(fill="x")
@@ -229,8 +230,14 @@ class App(tk.Tk):
         cb = ttk.Combobox(bar, textvariable=self.filter, values=["All", "TM", "TC", "CRC error"], state="readonly", width=13)
         bar.add(cb)
         cb.bind("<<ComboboxSelected>>", lambda _: self.render_table())
+        self.auto_scroll = tk.BooleanVar(value=True)
         bar.add(ttk.Button(bar, text="Export", command=self.export))
         bar.add(ttk.Button(bar, text="Clear", command=self.clear))
+        self.auto_scroll_button = ttk.Button(
+            bar, text="Auto-scroll: On", style="Accent.TButton",
+            command=self.toggle_auto_scroll, width=18,
+        )
+        bar.add(self.auto_scroll_button)
         table_box = ttk.Frame(right)
         table_box.pack(fill="both", expand=True)
         columns = ("time", "direction", "type", "apid", "seq", "crc", "onboard")
@@ -255,6 +262,7 @@ class App(tk.Tk):
         self.table.tag_configure("bad", foreground="#ff8888")
         self.table.tag_configure("offline", foreground="#a4b4cd")
         self.table.bind("<<TreeviewSelect>>", self.select_packet)
+        self.table.bind("<Configure>", lambda _: self.follow_traffic())
         ttk.Label(right, text="Selected packet details", style="Muted.TLabel").pack(anchor="w", pady=(12, 5))
         self.details = self.text_area(right, 6)
         self.details.pack(fill="both", expand=True)
@@ -375,7 +383,12 @@ class App(tk.Tk):
             return
         try:
             from serial.tools import list_ports
-            ports = list(list_ports.comports())
+            # pyserial discovery order is unspecified. ListPortInfo compares
+            # device names naturally (USB2 before USB10, S2 before S10).
+            ports = sorted(list_ports.comports(), key=lambda port: (
+                not (port.vid is not None or port.device.startswith(("/dev/ttyUSB", "/dev/ttyACM"))),
+                port,
+            ))
             self.port_box.configure(values=[p.device for p in ports])
             if ports and not self.vars["port"].get():
                 self.vars["port"].set(ports[0].device)
@@ -510,7 +523,27 @@ class App(tk.Tk):
         self.stats.set(f"TX {self.tx_count}   /   RX {self.rx_count}   /   CRC / decoding errors {self.bad_count}   ·   log {len(self.records)}/2000")
         if self.matches(record):
             self.insert_row(record)
-            self.table.see(record["id"])
+            self.follow_traffic()
+
+    def toggle_auto_scroll(self):
+        enabled = not self.auto_scroll.get()
+        self.auto_scroll.set(enabled)
+        self.auto_scroll_button.configure(
+            text="Auto-scroll: On" if enabled else "Auto-scroll: Off",
+            style="Accent.TButton" if enabled else "TButton",
+        )
+        self.follow_traffic()
+
+    def follow_traffic(self):
+        if self.auto_scroll.get() and self._follow_job is None:
+            # Let geometry and automatic scrollbar updates settle, and coalesce
+            # a burst instead of scrolling once for every packet.
+            self._follow_job = self.after(20, self._scroll_traffic)
+
+    def _scroll_traffic(self):
+        self._follow_job = None
+        if self.auto_scroll.get():
+            self.table.yview_moveto(1.0)
 
     def matches(self, r):
         f = self.filter.get()
@@ -529,6 +562,7 @@ class App(tk.Tk):
         for r in self.records:
             if self.matches(r):
                 self.insert_row(r)
+        self.follow_traffic()
 
     def select_packet(self, _=None):
         selection = self.table.selection()
@@ -682,6 +716,8 @@ class App(tk.Tk):
 
     def close(self):
         self.after_cancel(self._poll_job)
+        if self._follow_job is not None:
+            self.after_cancel(self._follow_job)
         if self.worker:
             self.worker.stop()
         self.destroy()

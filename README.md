@@ -31,7 +31,7 @@ Open a new terminal after `pipx ensurepath`. Download the `.whl` file from the
 [GitHub releases](https://github.com/mkooshmanian/thecook/releases), then install it:
 
 ```bash
-pipx install ./thecook-0.4.0-py3-none-any.whl
+pipx install ./thecook-0.5.0-py3-none-any.whl
 thecook
 ```
 
@@ -39,7 +39,7 @@ Use the filename matching the downloaded version. pipx installs pyserial in an
 isolated environment and exposes `thecook` in `~/.local/bin` on Linux. Keep the
 wheel for installation; copying it directly into `~/.local/bin` does not install it.
 Use a Python installation that includes Tkinter; if needed, select it explicitly
-with `pipx install --python /usr/bin/python3 ./thecook-0.4.0-py3-none-any.whl`.
+with `pipx install --python /usr/bin/python3 ./thecook-0.5.0-py3-none-any.whl`.
 
 You can also install directly from GitHub without downloading a release:
 
@@ -54,7 +54,7 @@ To update a wheel installation, download the new wheel and replace the installed
 version (substitute the actual filename):
 
 ```bash
-pipx install --force ./thecook-0.4.0-py3-none-any.whl
+pipx install --force ./thecook-0.5.0-py3-none-any.whl
 ```
 
 For a GitHub installation, use `pipx upgrade thecook`. To remove the application:
@@ -107,11 +107,11 @@ python -m build
 python -m twine check dist/*
 ```
 
-For version 0.4.0 this creates:
+For version 0.5.0 this creates:
 
 ```text
-dist/thecook-0.4.0-py3-none-any.whl
-dist/thecook-0.4.0.tar.gz
+dist/thecook-0.5.0-py3-none-any.whl
+dist/thecook-0.5.0.tar.gz
 ```
 
 The wheel includes the application, dependency metadata and MIT license; Python,
@@ -121,12 +121,12 @@ the README and build configuration.
 The **Build release packages** GitHub Actions workflow builds and checks both
 archives, verifies installation with pipx, and creates a GitHub release with both
 files when a `v`-prefixed tag is pushed. The tag must match the version in
-`pyproject.toml` and point to a commit containing the workflow. For version 0.4.0,
+`pyproject.toml` and point to a commit containing the workflow. For version 0.5.0,
 commit and push the changes first, then run:
 
 ```bash
-git tag -a v0.4.0 -m "The Cook 0.4.0"
-git push origin v0.4.0
+git tag -a v0.5.0 -m "The Cook 0.5.0"
+git push origin v0.5.0
 ```
 
 The workflow generates release notes automatically. A rerun uploads the packages
@@ -148,11 +148,18 @@ can be scrolled in small windows as well.
 Scrollbars update with the visible area and automatically hide when scrolling is
 unnecessary, including the packet table's horizontal and vertical scrollbars.
 
+In **03 Traffic**, **Auto-scroll** follows the latest visible packets by default.
+Turn it off to inspect older entries while packets keep arriving; turn it on to
+return to the latest entries. It also follows the last entry when changing a
+filter, without changing the selected packet.
+
 1. Choose **Serial** or **TCP** in **01 Communication link**. The
    settings change immediately with the selected transport:
 
    - **Serial:** select a port from the list (or enter its path), baud rate and
-     serial settings. Defaults are **115200, 8N1**, with no flow control.
+     serial settings. USB ports are listed first, with device numbers sorted
+     numerically (for example, `ttyUSB2` before `ttyUSB10`). Refreshing preserves
+     the currently entered port. Defaults are **115200, 8N1**, with no flow control.
    - **TCP:** enter the hostname / IP address and TCP port. Defaults
      are **localhost:4444**. The Cook connects as a TCP client.
 
